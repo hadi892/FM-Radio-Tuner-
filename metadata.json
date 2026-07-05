@@ -1,0 +1,6 @@
+{
+  "name": "FM Radio Tuner",
+  "description": "Native hardware FM Radio Tuner designed for Qualcomm Snapdragon 695 5G on Samsung Galaxy Tab A9+, featuring V4L2 radio driver control (/dev/radio0), hardware auto-scan, station presets, and speaker/headset routing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
