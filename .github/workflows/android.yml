@@ -37,3 +37,10 @@ jobs:
 
       - name: Build Debug & Release APK with Gradle 9.3.1
         run: gradle assembleDebug assembleRelease
+
+      - name: Upload APK Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FM-Radio-Tuner-APKs
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
