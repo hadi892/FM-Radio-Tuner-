@@ -284,6 +284,8 @@ fun FmRadioScreen(
             isStereo = uiState.isStereo,
             audioOutputMode = uiState.audioOutputMode,
             isHeadsetConnected = uiState.isHeadsetConnected,
+            audioPipelineStatus = uiState.audioPipelineStatus,
+            audioRoutingLogs = uiState.audioRoutingLogs,
             onDismiss = { onShowDiagnostics(false) }
         )
     }

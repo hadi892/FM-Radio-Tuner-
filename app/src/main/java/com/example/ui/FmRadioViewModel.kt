@@ -35,6 +35,8 @@ data class FmRadioUiState(
     val driverPath: String = "/dev/radio0",
     val driverStatusText: String = "Qualcomm SM6375 V4L2 Tuner Open",
     val chipsetInfo: String = "Qualcomm SM6375 Snapdragon 695 5G (Samsung Galaxy Tab A9+)",
+    val audioPipelineStatus: String = "Qualcomm Audio HAL: Patch Active",
+    val audioRoutingLogs: List<String> = emptyList(),
     val showDiagnosticsModal: Boolean = false,
     val showDirectEntryDialog: Boolean = false
 )
@@ -73,7 +75,9 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
                 isPowerOn = driverOpened,
                 driverPath = radioDriver.activeDevicePath,
                 driverStatusText = radioDriver.driverCapabilityString,
-                isHeadsetConnected = headsetAttached
+                isHeadsetConnected = headsetAttached,
+                audioPipelineStatus = audioRouter.audioPipelineStatus,
+                audioRoutingLogs = audioRouter.getRoutingDiagnostics()
             )
         }
         tuneFrequency(98.1f)
@@ -132,7 +136,13 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
             radioDriver.closeDriver()
             audioRouter.stopFmAudioRoute()
         }
-        _uiState.update { it.copy(isPowerOn = newPowerState) }
+        _uiState.update {
+            it.copy(
+                isPowerOn = newPowerState,
+                audioPipelineStatus = audioRouter.audioPipelineStatus,
+                audioRoutingLogs = audioRouter.getRoutingDiagnostics()
+            )
+        }
     }
 
     fun toggleMute() {
@@ -143,7 +153,13 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
 
     fun setAudioOutputMode(mode: AudioOutputMode) {
         audioRouter.applyOutputRouting(mode)
-        _uiState.update { it.copy(audioOutputMode = mode) }
+        _uiState.update {
+            it.copy(
+                audioOutputMode = mode,
+                audioPipelineStatus = audioRouter.audioPipelineStatus,
+                audioRoutingLogs = audioRouter.getRoutingDiagnostics()
+            )
+        }
     }
 
     fun stepFrequency(up: Boolean) {
@@ -282,7 +298,9 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
                     _uiState.update { current ->
                         current.copy(
                             isHeadsetConnected = headsetAttached,
-                            currentRssi = radioDriver.currentRssi
+                            currentRssi = radioDriver.currentRssi,
+                            audioPipelineStatus = audioRouter.audioPipelineStatus,
+                            audioRoutingLogs = audioRouter.getRoutingDiagnostics()
                         )
                     }
                 }

@@ -51,6 +51,8 @@ fun DiagnosticsModal(
     isStereo: Boolean,
     audioOutputMode: AudioOutputMode,
     isHeadsetConnected: Boolean,
+    audioPipelineStatus: String = "Active",
+    audioRoutingLogs: List<String> = emptyList(),
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -123,6 +125,13 @@ fun DiagnosticsModal(
                 statusColor = AmberPrimary
             )
 
+            DiagnosticRow(
+                icon = Icons.Default.CheckCircle,
+                label = "Qualcomm Audio HAL Pipeline",
+                value = audioPipelineStatus,
+                statusColor = SignalGreen
+            )
+
             Spacer(modifier = Modifier.height(12.dp))
 
             // Real-time Tuner Telemetry Box
@@ -158,6 +167,38 @@ fun DiagnosticsModal(
                             color = if (isStereo) SignalGreen else Color.Yellow,
                             fontFamily = FontFamily.Monospace
                         )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Audio Routing Telemetry Logs
+            Surface(
+                color = Color(0xFF101216),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF2C313B), RoundedCornerShape(12.dp))
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = "QUALCOMM AUDIO HAL ROUTING TELEMETRY",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberPrimary,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val logsToShow = if (audioRoutingLogs.isNotEmpty()) audioRoutingLogs.takeLast(6) else listOf("HAL audio routing initialized.")
+                    logsToShow.forEach { logMsg ->
+                        Text(
+                            text = "• $logMsg",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFC0C5D0),
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
                     }
                 }
             }
