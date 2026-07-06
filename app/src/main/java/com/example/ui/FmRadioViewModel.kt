@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.FmDatabase
 import com.example.data.FmStation
 import com.example.hardware.AudioOutputMode
+import com.example.hardware.HardwareScanResult
 import com.example.hardware.QualcommAudioRouter
 import com.example.hardware.V4l2RadioDriver
 import kotlinx.coroutines.Dispatchers
@@ -23,14 +24,15 @@ data class FmRadioUiState(
     val isPowerOn: Boolean = true,
     val isMuted: Boolean = false,
     val currentFrequency: Float = 98.1f,
-    val currentRssi: Int = 62,
-    val isStereo: Boolean = true,
+    val currentRssi: Int = V4l2RadioDriver.NOISE_FLOOR_RSSI,
+    val isStereo: Boolean = false,
     val isScanning: Boolean = false,
     val scanProgress: Float = 0f,
+    val scanDiagnostics: List<HardwareScanResult> = emptyList(),
     val audioOutputMode: AudioOutputMode = AudioOutputMode.WIRED_HEADSET,
     val isHeadsetConnected: Boolean = true,
-    val currentStationName: String = "Top 40 Hit Radio",
-    val currentRdsText: String = "POP 98.1 - Now Playing: Starburst",
+    val currentStationName: String = "FM 98.1 MHz",
+    val currentRdsText: String = "V4L2 Tuner Standby [Direct /dev/radio0 Access]",
     val isCurrentFavorite: Boolean = false,
     val driverPath: String = "/dev/radio0",
     val driverStatusText: String = "Qualcomm SM6375 V4L2 Tuner Open",
@@ -62,7 +64,6 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
     init {
         initializeHardware()
         startTelemetryPolling()
-        seedDefaultStationsIfEmpty()
     }
 
     private fun initializeHardware() {
@@ -81,23 +82,6 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
             )
         }
         tuneFrequency(98.1f)
-    }
-
-    private fun seedDefaultStationsIfEmpty() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val initialPresets = listOf(
-                FmStation(88.5f, "BBC Radio News", true, "NEWS 88.5 - Live World News", 65, true),
-                FmStation(91.1f, "Classic Rock 91", false, "ROCK 91.1 - The Greatest Hits", 58, true),
-                FmStation(95.5f, "Smooth Jazz FM", true, "JAZZ 95.5 - Evening Grooves", 61, true),
-                FmStation(98.1f, "Top 40 Hit Radio", true, "POP 98.1 - Now Playing: Starburst", 68, true),
-                FmStation(101.1f, "Mega Beats 101", false, "DANCE 101.1 - Electronic Mix", 55, true),
-                FmStation(104.5f, "Classical Symphony", false, "CLASSICAL 104.5 - Mozart K.550", 49, true),
-                FmStation(107.3f, "City Talk & Weather", false, "TALK 107.3 - Local Weather & Traffic", 52, false)
-            )
-            for (station in initialPresets) {
-                stationDao.insertOrUpdateStation(station)
-            }
-        }
     }
 
     fun tuneFrequency(freqMhz: Float) {
@@ -179,7 +163,7 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _uiState.update { it.copy(isScanning = true, scanProgress = 0.5f) }
             val lockedFreq = radioDriver.performHardwareSeek(up, _uiState.value.currentFrequency)
-            delay(250) // Brief hardware settling delay
+            delay(200) // Brief hardware settling delay
             _uiState.update { it.copy(isScanning = false, scanProgress = 1f) }
             tuneFrequency(lockedFreq)
         }
@@ -189,51 +173,50 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
         if (!_uiState.value.isPowerOn || _uiState.value.isScanning) return
         scanJob?.cancel()
         scanJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isScanning = true, scanProgress = 0f) }
+            // Purge all previously discovered or unconfirmed stations before hardware audit
+            stationDao.deleteAllStations()
+
+            _uiState.update { it.copy(isScanning = true, scanProgress = 0f, scanDiagnostics = emptyList()) }
             
-            var currentFreq = V4l2RadioDriver.BAND_MIN_MHZ
-            val totalSteps = ((V4l2RadioDriver.BAND_MAX_MHZ - V4l2RadioDriver.BAND_MIN_MHZ) / 0.1f).toInt()
-            var step = 0
-            
+            val diagnosticsList = mutableListOf<HardwareScanResult>()
             val newlyDiscovered = mutableListOf<FmStation>()
 
-            while (currentFreq <= V4l2RadioDriver.BAND_MAX_MHZ && _uiState.value.isScanning) {
-                val freq = (Math.round(currentFreq * 10.0) / 10.0).toFloat()
-                radioDriver.tuneToFrequency(freq)
-                val rssi = radioDriver.currentRssi
-                
-                step++
-                val progress = step.toFloat() / totalSteps
-                _uiState.update { it.copy(currentFrequency = freq, currentRssi = rssi, scanProgress = progress) }
+            val evaluatedResults = radioDriver.performHardwareFullScan { progress, evaluation ->
+                diagnosticsList.add(evaluation)
+                _uiState.update { current ->
+                    current.copy(
+                        currentFrequency = evaluation.frequencyMHz,
+                        currentRssi = evaluation.rssi,
+                        isStereo = evaluation.isStereo,
+                        scanProgress = progress,
+                        scanDiagnostics = diagnosticsList.toList()
+                    )
+                }
 
-                // Lock condition: Strong RSSI >= 38 dBm indicates valid broadcast carrier
-                if (rssi >= 38) {
-                    val name = resolveStationName(freq)
-                    val rds = resolveRdsText(freq)
+                // Strictly require physical hardware carrier confirmation before accepting station
+                if (evaluation.isLocked) {
                     val station = FmStation(
-                        frequencyMHz = freq,
-                        name = name,
+                        frequencyMHz = evaluation.frequencyMHz,
+                        name = resolveStationName(evaluation.frequencyMHz),
                         isFavorite = false,
-                        rdsText = rds,
-                        signalStrengthRssi = rssi,
-                        isStereo = radioDriver.isStereoActive
+                        rdsText = if (evaluation.rdsAvailable) "RDS SYNC ACTIVE [19kHz Pilot Verified]" else "V4L2 Hardware Lock [RSSI: ${evaluation.rssi} dBm]",
+                        signalStrengthRssi = evaluation.rssi,
+                        isStereo = evaluation.isStereo
                     )
                     newlyDiscovered.add(station)
-                    stationDao.insertOrUpdateStation(station)
-                    delay(180) // Pause slightly to let user hear the locked station carrier
-                } else {
-                    delay(30) // Fast step over noise floor
+                    viewModelScope.launch(Dispatchers.IO) {
+                        stationDao.insertOrUpdateStation(station)
+                    }
                 }
-                currentFreq += 0.1f
             }
 
-            _uiState.update { it.copy(isScanning = false, scanProgress = 1f) }
-            // Tune back to the strongest discovered station or 98.1
+            _uiState.update { it.copy(isScanning = false, scanProgress = 1f, scanDiagnostics = evaluatedResults) }
+
             val bestStation = newlyDiscovered.maxByOrNull { it.signalStrengthRssi }
             if (bestStation != null) {
                 tuneFrequency(bestStation.frequencyMHz)
             } else {
-                tuneFrequency(98.1f)
+                tuneFrequency(_uiState.value.currentFrequency)
             }
         }
     }
@@ -309,35 +292,11 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun resolveStationName(freq: Float): String {
-        return when (freq) {
-            88.5f -> "BBC Radio News"
-            91.1f -> "Classic Rock 91"
-            93.3f -> "Urban Vibes 93"
-            95.5f -> "Smooth Jazz FM"
-            98.1f -> "Top 40 Hit Radio"
-            100.3f -> "Country Legends"
-            101.1f -> "Mega Beats 101"
-            103.5f -> "Retro 80s & 90s"
-            104.5f -> "Classical Symphony"
-            107.3f -> "City Talk & Weather"
-            else -> "Local FM ${String.format("%.1f", freq)}"
-        }
+        return "FM ${String.format("%.1f", freq)} MHz"
     }
 
     private fun resolveRdsText(freq: Float): String {
-        return when (freq) {
-            88.5f -> "NEWS 88.5 - Live World News & Global Reports"
-            91.1f -> "ROCK 91.1 - Queen: Bohemian Rhapsody"
-            93.3f -> "URBAN 93.3 - Hip Hop Classics"
-            95.5f -> "JAZZ 95.5 - Miles Davis: So What"
-            98.1f -> "POP 98.1 - Dua Lipa: Starburst"
-            100.3f -> "COUNTRY 100.3 - Nashville Live"
-            101.1f -> "DANCE 101.1 - Daft Punk: One More Time"
-            103.5f -> "RETRO 103.5 - Synthwave Superhits"
-            104.5f -> "CLASSICAL 104.5 - Mozart Symphony No. 40"
-            107.3f -> "TALK 107.3 - Live Traffic & Weather Updates"
-            else -> "FM BROADCAST LOCK [RSSI: ${radioDriver.currentRssi} dBm]"
-        }
+        return "V4L2 RF Lock [RSSI: ${radioDriver.currentRssi} dBm]"
     }
 
     override fun onCleared() {
@@ -348,3 +307,4 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
         audioRouter.stopFmAudioRoute()
     }
 }
+

@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.FmStation
 import com.example.hardware.AudioOutputMode
+import com.example.hardware.HardwareScanResult
 import com.example.ui.components.DiagnosticsModal
 import com.example.ui.components.DirectFrequencyDialog
 import com.example.ui.components.RenamePresetDialog
@@ -222,32 +223,49 @@ fun FmRadioScreen(
                     Tab(
                         selected = selectedTabIndex == 0,
                         onClick = { selectedTabIndex = 0 },
-                        text = { Text("FAVORITE PRESETS (${favoriteStations.size})", fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+                        text = { Text("FAVORITES (${favoriteStations.size})", fontWeight = FontWeight.Bold, fontSize = 11.sp) }
                     )
                     Tab(
                         selected = selectedTabIndex == 1,
                         onClick = { selectedTabIndex = 1 },
-                        text = { Text("ALL DISCOVERED (${allStations.size})", fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+                        text = { Text("DISCOVERED (${allStations.size})", fontWeight = FontWeight.Bold, fontSize = 11.sp) }
+                    )
+                    Tab(
+                        selected = selectedTabIndex == 2,
+                        onClick = { selectedTabIndex = 2 },
+                        text = { Text("SCAN AUDIT (${uiState.scanDiagnostics.size})", fontWeight = FontWeight.Bold, fontSize = 11.sp) }
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            // Station List
-            val displayList = if (selectedTabIndex == 0) favoriteStations else allStations
-            if (displayList.isEmpty()) {
-                item {
-                    EmptyPresetsBox(isFavoritesTab = selectedTabIndex == 0, onScan = onStartScan)
+            // Station List / Audit List
+            if (selectedTabIndex == 2) {
+                if (uiState.scanDiagnostics.isEmpty()) {
+                    item {
+                        EmptyScanAuditBox(onScan = onStartScan)
+                    }
+                } else {
+                    items(uiState.scanDiagnostics, key = { it.frequencyMHz }) { audit ->
+                        ScanDiagnosticItemCard(audit = audit, onTune = { onTuneFrequency(audit.frequencyMHz) })
+                    }
                 }
             } else {
-                items(displayList, key = { it.frequencyMHz }) { station ->
-                    StationItemCard(
-                        station = station,
-                        isActive = Math.abs(station.frequencyMHz - uiState.currentFrequency) < 0.05f && uiState.isPowerOn,
-                        onTune = { onTuneFrequency(station.frequencyMHz) },
-                        onEditName = { stationToRename = station },
-                        onDelete = { onDeleteStation(station) }
-                    )
+                val displayList = if (selectedTabIndex == 0) favoriteStations else allStations
+                if (displayList.isEmpty()) {
+                    item {
+                        EmptyPresetsBox(isFavoritesTab = selectedTabIndex == 0, onScan = onStartScan)
+                    }
+                } else {
+                    items(displayList, key = { it.frequencyMHz }) { station ->
+                        StationItemCard(
+                            station = station,
+                            isActive = Math.abs(station.frequencyMHz - uiState.currentFrequency) < 0.05f && uiState.isPowerOn,
+                            onTune = { onTuneFrequency(station.frequencyMHz) },
+                            onEditName = { stationToRename = station },
+                            onDelete = { onDeleteStation(station) }
+                        )
+                    }
                 }
             }
         }
@@ -286,6 +304,7 @@ fun FmRadioScreen(
             isHeadsetConnected = uiState.isHeadsetConnected,
             audioPipelineStatus = uiState.audioPipelineStatus,
             audioRoutingLogs = uiState.audioRoutingLogs,
+            scanDiagnostics = uiState.scanDiagnostics,
             onDismiss = { onShowDiagnostics(false) }
         )
     }
@@ -848,6 +867,112 @@ private fun EmptyPresetsBox(isFavoritesTab: Boolean, onScan: () -> Unit) {
             Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = if (isFavoritesTab) "Tap the heart icon on any station to save it here for instant one-touch tuning." else "Run a Full Band Hardware Scan to automatically discover all local FM carriers.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScanDiagnosticItemCard(audit: HardwareScanResult, onTune: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onTune),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = if (audit.isLocked) Color(0xFF182A1A) else TunerCardSurface),
+        border = androidx.compose.foundation.BorderStroke(
+            if (audit.isLocked) 1.5.dp else 1.dp,
+            if (audit.isLocked) SignalGreen else Color(0xFF323843)
+        )
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        color = if (audit.isLocked) SignalGreen else Color(0xFF131519),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = String.format("%.1f MHz", audit.frequencyMHz),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (audit.isLocked) Color.Black else AmberPrimary,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = if (audit.isLocked) "CARRIER LOCKED" else "REJECTED BY V4L2",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (audit.isLocked) SignalGreen else Color(0xFFFF8080),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Text(
+                    text = "${audit.rssi} dBm",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Stereo 19kHz: ${if (audit.isStereo) "LOCKED" else "MONO"} | RDS: ${if (audit.rdsAvailable) "YES" else "NONE"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFC0C5D0),
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Reason: ${audit.reason}",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (audit.isLocked) SignalGreen else Color.Gray,
+                fontSize = 11.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyScanAuditBox(onScan: () -> Unit) {
+    Surface(
+        color = Color(0xFF131519),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+            .border(1.dp, Color(0xFF2C313B), RoundedCornerShape(14.dp))
+    ) {
+        Column(
+            modifier = Modifier.padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(Icons.Default.DeveloperBoard, contentDescription = null, tint = AmberPrimary, modifier = Modifier.size(48.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "No V4L2 Hardware Scan Executed",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Tap 'FULL SCAN' to step from 87.5 to 108.0 MHz and inspect raw V4L2 ioctl metrics, RSSI threshold tests, and stereo pilot verifications for every single frequency step.",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.Gray,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
