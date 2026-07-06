@@ -62,19 +62,86 @@ class QualcommAudioRouter(private val context: Context) {
     init {
         logStep("System Init: Qualcomm SM6375 Audio Router (Snapdragon 695 Audio HAL)")
         verifyAudioSystemCapabilities()
+        runDeepAlsaAndVendorAudit()
     }
 
     @Synchronized
     fun logStep(message: String) {
         Log.i(TAG, message)
         routingLogs.add(message)
-        if (routingLogs.size > 50) {
+        if (routingLogs.size > 80) {
             routingLogs.removeAt(0)
         }
     }
 
     @Synchronized
     fun getRoutingDiagnostics(): List<String> = routingLogs.toList()
+
+    /**
+     * Exhaustive native platform audit of ALSA sound cards, PCM devices, mixer controls, and vendor properties.
+     */
+    fun runDeepAlsaAndVendorAudit() {
+        logStep("=== PRINCIPAL QUALCOMM HARDWARE & ALSA AUDIT ===")
+        try {
+            // Audit ALSA Sound Cards
+            val cardsFile = java.io.File("/proc/asound/cards")
+            if (cardsFile.exists()) {
+                val cardsContent = cardsFile.readText().trim().lines()
+                logStep("ALSA Cards Detected (${cardsContent.size / 2} soundcards found):")
+                cardsContent.take(6).forEach { logStep("  ALSA Card: $it") }
+            } else {
+                logStep("ALSA /proc/asound/cards protected by SELinux sandbox.")
+            }
+
+            // Audit ALSA PCM Devices
+            val pcmFile = java.io.File("/proc/asound/pcm")
+            if (pcmFile.exists()) {
+                val pcmLines = pcmFile.readText().trim().lines()
+                val fmPcm = pcmLines.filter { it.contains("FM", ignoreCase = true) || it.contains("WCN", ignoreCase = true) || it.contains("SLIM", ignoreCase = true) || it.contains("MI2S", ignoreCase = true) }
+                logStep("ALSA PCM Devices (${pcmLines.size} total): Found ${fmPcm.size} hardware DAI links matching FM/MI2S/SLIM")
+                fmPcm.take(4).forEach { logStep("  ALSA PCM: $it") }
+            }
+
+            // Audit Vendor Properties via SystemProperties reflection
+            try {
+                val sysPropClass = Class.forName("android.os.SystemProperties")
+                val getMethod = sysPropClass.getMethod("get", String::class.java, String::class.java)
+                val propsToAudit = listOf(
+                    "ro.board.platform",
+                    "ro.hardware",
+                    "vendor.audio.feature.fm.enable",
+                    "hw.fm.mode",
+                    "persist.vendor.audio.fm.rx",
+                    "ro.vendor.audio.sdk.ssr"
+                )
+                for (p in propsToAudit) {
+                    val valStr = getMethod.invoke(null, p, "N/A") as String
+                    logStep("Vendor Prop [$p]: $valStr")
+                }
+            } catch (e: Exception) {
+                logStep("Vendor property audit note: ${e.message}")
+            }
+
+            // Audit AudioDeviceInfo Hardware Ports
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                logStep("Android Audio HAL Input Devices (${inputs.size} total):")
+                for (inDev in inputs) {
+                    val typeName = when (inDev.type) {
+                        TYPE_FM_TUNER -> "FM_TUNER_HW (ID 21)"
+                        AudioDeviceInfo.TYPE_BUILTIN_MIC -> "BUILTIN_MIC"
+                        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "WIRED_HEADSET_MIC"
+                        else -> "Type ${inDev.type}"
+                    }
+                    if (inDev.type == TYPE_FM_TUNER || inDev.productName.toString().contains("FM", true)) {
+                        logStep("  ★ HARDWARE FM TUNER PORT LOCKED: [${inDev.productName}] Type=$typeName ID=${inDev.id}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logStep("Deep audit note: ${e.message}")
+        }
+    }
 
     fun isHeadsetConnected(): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
