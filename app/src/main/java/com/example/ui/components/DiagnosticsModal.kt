@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -47,7 +48,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hardware.AudioOutputMode
+import com.example.hardware.AudioStageProof
 import com.example.hardware.HardwareScanResult
+import com.example.hardware.V4l2TelemetryRecord
+import com.example.hardware.VendorFileAudit
 import com.example.ui.theme.AmberPrimary
 import com.example.ui.theme.SignalGreen
 import com.example.ui.theme.TunerCardSurface
@@ -66,9 +70,14 @@ fun DiagnosticsModal(
     audioPipelineStatus: String = "Active",
     audioRoutingLogs: List<String> = emptyList(),
     scanDiagnostics: List<HardwareScanResult> = emptyList(),
+    telemetryRecords: List<V4l2TelemetryRecord> = emptyList(),
+    driverAuditLogs: List<String> = emptyList(),
+    audioStagesProof: List<AudioStageProof> = emptyList(),
+    vendorAuditList: List<VendorFileAudit> = emptyList(),
+    isHardwareVerified: Boolean = false,
     onDismiss: () -> Unit
 ) {
-    var selectedTab by remember { mutableStateOf("TELEMETRY") }
+    var selectedTab by remember { mutableStateOf("PHASE1_TELEMETRY") }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -110,63 +119,39 @@ fun DiagnosticsModal(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Tab Selector
+            // 5-Phase Scrollable Tab Selector
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color(0xFF14171D), RoundedCornerShape(8.dp))
+                    .horizontalScroll(rememberScrollState())
                     .padding(4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (selectedTab == "TELEMETRY") AmberPrimary else Color.Transparent)
-                        .clickable { selectedTab = "TELEMETRY" }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "TELEMETRY",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (selectedTab == "TELEMETRY") Color.Black else Color.Gray,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(modifier = Modifier.width(4.dp))
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (selectedTab == "REPORT") AmberPrimary else Color.Transparent)
-                        .clickable { selectedTab = "REPORT" }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "V4L2 AUDIT",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (selectedTab == "REPORT") Color.Black else Color.Gray,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(modifier = Modifier.width(4.dp))
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (selectedTab == "SCAN_LOG") AmberPrimary else Color.Transparent)
-                        .clickable { selectedTab = "SCAN_LOG" }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "SCAN LOG (${scanDiagnostics.size})",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (selectedTab == "SCAN_LOG") Color.Black else Color.Gray,
-                        fontWeight = FontWeight.Bold
-                    )
+                val tabs = listOf(
+                    "PHASE1_TELEMETRY" to "P1: TELEMETRY",
+                    "PHASE2_AUDIT" to "P2: V4L2 AUDIT",
+                    "PHASE3_SCAN" to "P3: SCAN LOG (${scanDiagnostics.size})",
+                    "PHASE4_AUDIO" to "P4: AUDIO PATH",
+                    "PHASE5_VENDOR" to "P5: SAMSUNG HAL"
+                )
+                tabs.forEach { (key, label) ->
+                    val isSelected = selectedTab == key || (selectedTab == "TELEMETRY" && key == "PHASE1_TELEMETRY") || (selectedTab == "REPORT" && key == "PHASE2_AUDIT") || (selectedTab == "SCAN_LOG" && key == "PHASE3_SCAN")
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isSelected) AmberPrimary else Color.Transparent)
+                            .clickable { selectedTab = key }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isSelected) Color.Black else Color.Gray,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
 
@@ -174,121 +159,118 @@ fun DiagnosticsModal(
             HorizontalDivider(color = Color(0xFF323843))
             Spacer(modifier = Modifier.height(16.dp))
 
-            when (selectedTab) {
-                "TELEMETRY" -> {
-                // Diagnostic Item Cards
-                DiagnosticRow(
-                    icon = Icons.Default.Memory,
-                    label = "Chipset / SoC",
-                    value = chipsetInfo,
-                    statusColor = Color.White
-                )
-
-                DiagnosticRow(
-                    icon = Icons.Default.Radio,
-                    label = "V4L2 Driver Node",
-                    value = "$driverPath (${if (isPowerOn) "ACTIVE" else "POWERED OFF"})",
-                    statusColor = if (isPowerOn) SignalGreen else Color.Gray
-                )
-
-                DiagnosticRow(
-                    icon = Icons.Default.Security,
-                    label = "SELinux Permissions",
-                    value = "Unrestricted access granted to driver /dev/radio0",
-                    statusColor = SignalGreen
-                )
-
-                DiagnosticRow(
-                    icon = Icons.Default.Speaker,
-                    label = "Audio Routing Path",
-                    value = "${audioOutputMode.displayName} (${if (isHeadsetConnected) "Antenna Attached" else "Antenna Open"})",
-                    statusColor = AmberPrimary
-                )
-
-                DiagnosticRow(
-                    icon = Icons.Default.CheckCircle,
-                    label = "Qualcomm Audio HAL Pipeline",
-                    value = audioPipelineStatus,
-                    statusColor = SignalGreen
-                )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Real-time Tuner Telemetry Box
-            Surface(
-                color = Color(0xFF14171C),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, Color(0xFF2C313B), RoundedCornerShape(12.dp))
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(
-                        text = "V4L2 IOCTL HARDWARE STATUS",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AmberPrimary,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
+            when {
+                selectedTab == "PHASE1_TELEMETRY" || selectedTab == "TELEMETRY" -> {
+                    DiagnosticRow(
+                        icon = Icons.Default.Memory,
+                        label = "Chipset / SoC",
+                        value = chipsetInfo,
+                        statusColor = Color.White
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+
+                    DiagnosticRow(
+                        icon = Icons.Default.Radio,
+                        label = "V4L2 Driver Node",
+                        value = "$driverPath (${if (isPowerOn) "ACTIVE" else "POWERED OFF"})",
+                        statusColor = if (isPowerOn) SignalGreen else Color.Gray
+                    )
+
+                    DiagnosticRow(
+                        icon = Icons.Default.Security,
+                        label = "Hardware Status Verification",
+                        value = if (isHardwareVerified) "REAL HARDWARE DETECTED" else "UNVERIFIED [SELinux EACCES / Sandbox]",
+                        statusColor = if (isHardwareVerified) SignalGreen else Color(0xFFFF5252)
+                    )
+
+                    DiagnosticRow(
+                        icon = Icons.Default.Speaker,
+                        label = "Audio Routing Path",
+                        value = "${audioOutputMode.displayName} (${if (isHeadsetConnected) "Antenna Attached" else "Antenna Open"})",
+                        statusColor = AmberPrimary
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Real-time Tuner Telemetry Box
+                    Surface(
+                        color = Color(0xFF14171C),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, Color(0xFF2C313B), RoundedCornerShape(12.dp))
                     ) {
-                        Text(
-                            text = "VIDIOC_G_TUNER RSSI: $currentRssi dBm",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFE0E0E0),
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = if (isStereo) "STEREO (19kHz Pilot Lock)" else "MONO",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isStereo) SignalGreen else Color.Yellow,
-                            fontFamily = FontFamily.Monospace
-                        )
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "PHASE 1: LIVE V4L2 IOCTL TELEMETRY RECORDS",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AmberPrimary,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            if (telemetryRecords.isEmpty()) {
+                                Text(
+                                    text = "No ioctl calls recorded yet.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray
+                                )
+                            } else {
+                                telemetryRecords.take(15).forEach { record ->
+                                    Text(
+                                        text = "[${record.timestamp}] ${record.metricName}: ${record.ioctlUsed} -> ${record.returnedValue} (${record.verificationStatus})",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (record.verificationStatus.startsWith("VERIFIED")) SignalGreen else Color(0xFFFF8080),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                }
+                            }
+                        }
                     }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Audio Routing Telemetry Logs
-            Surface(
-                color = Color(0xFF101216),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, Color(0xFF2C313B), RoundedCornerShape(12.dp))
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(
-                        text = "QUALCOMM AUDIO HAL ROUTING TELEMETRY",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AmberPrimary,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    val logsToShow = if (audioRoutingLogs.isNotEmpty()) audioRoutingLogs.takeLast(8) else listOf("HAL audio routing initialized.")
-                    logsToShow.forEach { logMsg ->
-                        Text(
-                            text = "• $logMsg",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFC0C5D0),
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
+                selectedTab == "PHASE2_AUDIT" || selectedTab == "REPORT" -> {
+                    Surface(
+                        color = Color(0xFF101216),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, Color(0xFF2C313B), RoundedCornerShape(12.dp))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "PHASE 2: QUALCOMM FM DRIVER VALIDATION AUDIT",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AmberPrimary,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            val logs = if (driverAuditLogs.isNotEmpty()) driverAuditLogs else listOf("No driver audit logs generated.")
+                            logs.forEach { logMsg ->
+                                Text(
+                                    text = "• $logMsg",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFC0C5D0),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                            }
+                        }
                     }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    PrincipalEngineeringReportView(audioRoutingLogs)
                 }
-            }
-            }
-            "REPORT" -> {
-                PrincipalEngineeringReportView(audioRoutingLogs)
-            }
-            "SCAN_LOG" -> {
-                ScanDiagnosticsAuditView(scanDiagnostics)
-            }
+                selectedTab == "PHASE3_SCAN" || selectedTab == "SCAN_LOG" -> {
+                    ScanDiagnosticsAuditView(scanDiagnostics)
+                }
+                selectedTab == "PHASE4_AUDIO" -> {
+                    AudioPipelineProofView(audioStagesProof)
+                }
+                selectedTab == "PHASE5_VENDOR" -> {
+                    VendorAuditView(vendorAuditList)
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -499,6 +481,173 @@ private fun DiagnosticRow(
                 color = statusColor,
                 fontWeight = FontWeight.Medium
             )
+        }
+    }
+}
+
+@Composable
+private fun AudioPipelineProofView(stages: List<AudioStageProof>) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "PHASE 4: 10-STAGE AUDIO PIPELINE HARDWARE PROOF",
+            style = MaterialTheme.typography.labelMedium,
+            color = AmberPrimary,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Strict end-to-end verification of every stage from FM RF carrier antenna to physical speaker/headset sink.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.Gray
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (stages.isEmpty()) {
+            Surface(
+                color = Color(0xFF101216),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF2C313B), RoundedCornerShape(8.dp))
+            ) {
+                Text(
+                    text = "No audio pipeline stages recorded.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+        } else {
+            stages.forEach { stage ->
+                Surface(
+                    color = Color(0xFF121418),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .border(1.dp, Color(0xFF2C313B), RoundedCornerShape(8.dp))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "STAGE ${stage.stageNumber}: ${stage.stageName}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Surface(
+                                color = Color(0xFF1B2A20),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = stage.status,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SignalGreen,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stage.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFC0C5D0),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VendorAuditView(files: List<VendorFileAudit>) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "PHASE 5: SAMSUNG GALAXY TAB A9+ VENDOR HAL AUDIT",
+            style = MaterialTheme.typography.labelMedium,
+            color = AmberPrimary,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Exhaustive hardware component scan across /vendor/lib64, /vendor/etc, /odm, and /system_ext partitions.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.Gray
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (files.isEmpty()) {
+            Surface(
+                color = Color(0xFF101216),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF2C313B), RoundedCornerShape(8.dp))
+            ) {
+                Text(
+                    text = "Vendor audit not executed yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+        } else {
+            files.forEach { audit ->
+                Surface(
+                    color = Color(0xFF121418),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .border(1.dp, if (audit.exists) Color(0xFF2A3D30) else Color(0xFF3D2A2A), RoundedCornerShape(8.dp))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${audit.partitionPath}/${audit.fileName}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = if (audit.exists) Color.White else Color(0xFFFF9999),
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Surface(
+                                color = if (audit.exists) Color(0xFF1B2A20) else Color(0xFF3B2424),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = if (audit.exists) "FOUND" else "MISSING",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (audit.exists) SignalGreen else Color(0xFFFF8080),
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = audit.note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFC0C5D0),
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
         }
     }
 }

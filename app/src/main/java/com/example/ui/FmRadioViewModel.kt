@@ -6,9 +6,12 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.FmDatabase
 import com.example.data.FmStation
 import com.example.hardware.AudioOutputMode
+import com.example.hardware.AudioStageProof
 import com.example.hardware.HardwareScanResult
 import com.example.hardware.QualcommAudioRouter
 import com.example.hardware.V4l2RadioDriver
+import com.example.hardware.V4l2TelemetryRecord
+import com.example.hardware.VendorFileAudit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -31,14 +34,19 @@ data class FmRadioUiState(
     val scanDiagnostics: List<HardwareScanResult> = emptyList(),
     val audioOutputMode: AudioOutputMode = AudioOutputMode.WIRED_HEADSET,
     val isHeadsetConnected: Boolean = true,
-    val currentStationName: String = "FM 98.1 MHz",
-    val currentRdsText: String = "V4L2 Tuner Standby [Direct /dev/radio0 Access]",
+    val currentStationName: String = "UNVERIFIED",
+    val currentRdsText: String = "UNVERIFIED (V4L2 ioctl required)",
     val isCurrentFavorite: Boolean = false,
     val driverPath: String = "/dev/radio0",
     val driverStatusText: String = "Qualcomm SM6375 V4L2 Tuner Open",
     val chipsetInfo: String = "Qualcomm SM6375 Snapdragon 695 5G (Samsung Galaxy Tab A9+)",
     val audioPipelineStatus: String = "Qualcomm Audio HAL: Patch Active",
     val audioRoutingLogs: List<String> = emptyList(),
+    val telemetryRecords: List<V4l2TelemetryRecord> = emptyList(),
+    val driverAuditLogs: List<String> = emptyList(),
+    val audioStagesProof: List<AudioStageProof> = emptyList(),
+    val vendorAuditList: List<VendorFileAudit> = emptyList(),
+    val isHardwareVerified: Boolean = false,
     val showDiagnosticsModal: Boolean = false,
     val showDirectEntryDialog: Boolean = false
 )
@@ -70,6 +78,7 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
         val driverOpened = radioDriver.initAndOpenDriver()
         audioRouter.startFmAudioRoute()
         val headsetAttached = audioRouter.isHeadsetConnected()
+        val vendorFiles = audioRouter.executeSamsungVendorAudit()
 
         _uiState.update { current ->
             current.copy(
@@ -78,10 +87,20 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
                 driverStatusText = radioDriver.driverCapabilityString,
                 isHeadsetConnected = headsetAttached,
                 audioPipelineStatus = audioRouter.audioPipelineStatus,
-                audioRoutingLogs = audioRouter.getRoutingDiagnostics()
+                audioRoutingLogs = audioRouter.getRoutingDiagnostics(),
+                telemetryRecords = radioDriver.getTelemetryRecords(),
+                driverAuditLogs = radioDriver.getDriverAuditLogs(),
+                audioStagesProof = audioRouter.getAudioPipelineProof(),
+                vendorAuditList = vendorFiles,
+                isHardwareVerified = checkHardwareVerified()
             )
         }
         tuneFrequency(98.1f)
+    }
+
+    private fun checkHardwareVerified(): Boolean {
+        val records = radioDriver.getTelemetryRecords()
+        return records.any { it.verificationStatus.startsWith("VERIFIED") }
     }
 
     fun tuneFrequency(freqMhz: Float) {
@@ -89,11 +108,12 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
         val clamped = formatted.coerceIn(V4l2RadioDriver.BAND_MIN_MHZ, V4l2RadioDriver.BAND_MAX_MHZ)
         
         radioDriver.tuneToFrequency(clamped)
+        val verified = checkHardwareVerified()
         
         viewModelScope.launch(Dispatchers.IO) {
             val existing = stationDao.getStationByFrequency(clamped)
-            val name = existing?.name ?: resolveStationName(clamped)
-            val rds = existing?.rdsText ?: resolveRdsText(clamped)
+            val name = if (verified) (existing?.name ?: resolveStationName(clamped)) else "UNVERIFIED"
+            val rds = if (verified) (existing?.rdsText ?: resolveRdsText(clamped)) else "UNVERIFIED (Hardware ioctl EACCES)"
             val fav = existing?.isFavorite ?: false
 
             _uiState.update { current ->
@@ -103,7 +123,9 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
                     isStereo = radioDriver.isStereoActive,
                     currentStationName = name,
                     currentRdsText = rds,
-                    isCurrentFavorite = fav
+                    isCurrentFavorite = fav,
+                    telemetryRecords = radioDriver.getTelemetryRecords(),
+                    isHardwareVerified = verified
                 )
             }
         }
@@ -124,7 +146,11 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 isPowerOn = newPowerState,
                 audioPipelineStatus = audioRouter.audioPipelineStatus,
-                audioRoutingLogs = audioRouter.getRoutingDiagnostics()
+                audioRoutingLogs = audioRouter.getRoutingDiagnostics(),
+                telemetryRecords = radioDriver.getTelemetryRecords(),
+                driverAuditLogs = radioDriver.getDriverAuditLogs(),
+                audioStagesProof = audioRouter.getAudioPipelineProof(),
+                isHardwareVerified = checkHardwareVerified()
             )
         }
     }
@@ -141,7 +167,8 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 audioOutputMode = mode,
                 audioPipelineStatus = audioRouter.audioPipelineStatus,
-                audioRoutingLogs = audioRouter.getRoutingDiagnostics()
+                audioRoutingLogs = audioRouter.getRoutingDiagnostics(),
+                audioStagesProof = audioRouter.getAudioPipelineProof()
             )
         }
     }
@@ -189,7 +216,8 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
                         currentRssi = evaluation.rssi,
                         isStereo = evaluation.isStereo,
                         scanProgress = progress,
-                        scanDiagnostics = diagnosticsList.toList()
+                        scanDiagnostics = diagnosticsList.toList(),
+                        telemetryRecords = radioDriver.getTelemetryRecords()
                     )
                 }
 
@@ -210,7 +238,7 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
 
-            _uiState.update { it.copy(isScanning = false, scanProgress = 1f, scanDiagnostics = evaluatedResults) }
+            _uiState.update { it.copy(isScanning = false, scanProgress = 1f, scanDiagnostics = evaluatedResults, telemetryRecords = radioDriver.getTelemetryRecords()) }
 
             val bestStation = newlyDiscovered.maxByOrNull { it.signalStrengthRssi }
             if (bestStation != null) {
@@ -278,12 +306,16 @@ class FmRadioViewModel(application: Application) : AndroidViewModel(application)
                 delay(3000)
                 if (_uiState.value.isPowerOn && !_uiState.value.isScanning) {
                     val headsetAttached = audioRouter.isHeadsetConnected()
+                    val verified = checkHardwareVerified()
                     _uiState.update { current ->
                         current.copy(
                             isHeadsetConnected = headsetAttached,
                             currentRssi = radioDriver.currentRssi,
                             audioPipelineStatus = audioRouter.audioPipelineStatus,
-                            audioRoutingLogs = audioRouter.getRoutingDiagnostics()
+                            audioRoutingLogs = audioRouter.getRoutingDiagnostics(),
+                            telemetryRecords = radioDriver.getTelemetryRecords(),
+                            audioStagesProof = audioRouter.getAudioPipelineProof(),
+                            isHardwareVerified = verified
                         )
                     }
                 }

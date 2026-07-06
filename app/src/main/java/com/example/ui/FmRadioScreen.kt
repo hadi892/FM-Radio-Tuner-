@@ -305,6 +305,11 @@ fun FmRadioScreen(
             audioPipelineStatus = uiState.audioPipelineStatus,
             audioRoutingLogs = uiState.audioRoutingLogs,
             scanDiagnostics = uiState.scanDiagnostics,
+            telemetryRecords = uiState.telemetryRecords,
+            driverAuditLogs = uiState.driverAuditLogs,
+            audioStagesProof = uiState.audioStagesProof,
+            vendorAuditList = uiState.vendorAuditList,
+            isHardwareVerified = uiState.isHardwareVerified,
             onDismiss = { onShowDiagnostics(false) }
         )
     }
@@ -412,22 +417,22 @@ private fun VfdDigitalDisplay(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Surface(
-                        color = if (uiState.isPowerOn && uiState.isStereo) Color(0xFF2979FF) else Color(0xFF2C313B),
+                        color = if (uiState.isPowerOn && uiState.isStereo && uiState.isHardwareVerified) Color(0xFF2979FF) else Color(0xFF2C313B),
                         shape = RoundedCornerShape(4.dp)
                     ) {
                         Text(
-                            text = if (uiState.isStereo) " STEREO " else " MONO ",
+                            text = if (!uiState.isHardwareVerified) " UNVERIFIED " else if (uiState.isStereo) " STEREO " else " MONO ",
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (uiState.isPowerOn && uiState.isStereo) Color.White else Color.Gray,
+                            color = if (uiState.isPowerOn && uiState.isStereo && uiState.isHardwareVerified) Color.White else Color.Gray,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (uiState.isPowerOn) "V4L2 LOCK /dev/radio0" else "STANDBY",
+                        text = if (uiState.isPowerOn) (if (uiState.isHardwareVerified) "V4L2 LOCK /dev/radio0" else "UNVERIFIED [SELinux EACCES]") else "STANDBY",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (uiState.isPowerOn) SignalGreen else Color.Gray,
+                        color = if (uiState.isPowerOn) (if (uiState.isHardwareVerified) SignalGreen else Color(0xFFFF5252)) else Color.Gray,
                         fontFamily = FontFamily.Monospace
                     )
                 }
@@ -502,13 +507,13 @@ private fun VfdDigitalDisplay(
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (uiState.isPowerOn) "${uiState.currentRssi} dBm" else "0 dBm",
+                        text = if (!uiState.isPowerOn) "0 dBm" else if (!uiState.isHardwareVerified) "UNVERIFIED" else "${uiState.currentRssi} dBm",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color.Gray,
+                        color = if (!uiState.isHardwareVerified) Color(0xFFFF5252) else Color.Gray,
                         fontFamily = FontFamily.Monospace
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    SignalBars(rssi = if (uiState.isPowerOn) uiState.currentRssi else 0)
+                    SignalBars(rssi = if (uiState.isPowerOn && uiState.isHardwareVerified) uiState.currentRssi else 0)
                 }
             }
 
